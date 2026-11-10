@@ -1,0 +1,53 @@
+name: Build Earpiece app
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - index.html
+      - README.md
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Unpack the newest project zip
+        run: |
+          newest=""
+          stamp=0
+          for z in *.zip; do
+            [ -e "$z" ] || continue
+            t=$(git log -1 --format=%ct -- "$z")
+            if [ "${t:-0}" -ge "$stamp" ]; then stamp=${t:-0}; newest="$z"; fi
+          done
+          if [ -z "$newest" ]; then echo "::error::No .zip file found. Upload earpiece-android.zip to this repository first."; exit 1; fi
+          echo "Using $newest"
+          unzip -q "$newest" -d project
+          test -f project/settings.gradle || { echo "::error::$newest is not the Earpiece project zip."; exit 1; }
+
+      - name: Build the app
+        working-directory: project
+        run: |
+          export JAVA_HOME="${JAVA_HOME_17_X64:-$JAVA_HOME}"
+          export PATH="$JAVA_HOME/bin:$PATH"
+          curl -fsSL -o /tmp/gradle.zip https://services.gradle.org/distributions/gradle-8.11.1-bin.zip
+          unzip -q /tmp/gradle.zip -d /tmp
+          /tmp/gradle-8.11.1/bin/gradle --no-daemon assembleDebug
+          cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/earpiece.apk"
+
+      - name: Publish the app
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "build-${{ github.run_number }}-${{ github.run_attempt }}" earpiece.apk \
+            --title "Earpiece app, build ${{ github.run_number }}" \
+            --notes "Open this page on your Android phone, download earpiece.apk, then tap it to install."
